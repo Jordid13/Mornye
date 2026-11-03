@@ -656,37 +656,41 @@ class NetworkStorageService {
   }
 
   /// The loopback proxy songs play through. iOS can close its listening
-  /// socket while the app is suspended in the background; a proxy that no
-  /// longer accepts connections is started again, instead of every song
-  /// failing until the app restarts. Routes outlive it.
+  /// socket while the app is suspended in the background, after which every
+  /// song failed until a restart. A proxy that stops accepting connections
+  /// is started again, on the same port when it can, so addresses already
+  /// handed out (such as a prepared next song) keep working.
   Future<HttpServer> _proxy() async {
     final running = _server;
     if (running != null) {
-      HttpServer? server;
-      try {
-        server = await running;
-        final probe = await Socket.connect(
-          InternetAddress.loopbackIPv4,
-          server.port,
-          timeout: const Duration(seconds: 1),
-        );
-        probe.destroy();
+      final server = await running.then<HttpServer?>(
+        (server) => server,
+        onError: (Object _) => null,
+      );
+      final now = DateTime.now();
+      final fresh = now.difference(_proxyCheckedAt) < _proxyCheckInterval;
+      // Checked twice before restarting: a false alarm must not cut off a
+      // song that is playing.
+      if (server != null &&
+          (fresh || await _accepts(_proxyPort) || await _accepts(_proxyPort))) {
+        if (!fresh) _proxyCheckedAt = now;
         return server;
-      } catch (_) {
-        if (identical(_server, running)) _server = null;
-        try {
-          await server?.close(force: true);
-        } catch (_) {}
+      }
+      if (identical(_server, running)) {
+        _server = null;
+        unawaited(server?.close(force: true).catchError((Object _) {}));
       }
     }
-    _server ??= HttpServer.bind(InternetAddress.loopbackIPv4, 0).then((server) {
-      server.listen(
-        (request) => unawaited(_serve(request)),
-        // A reclaimed socket can end the stream with an error.
-        onError: (Object _) {},
-      );
-      return server;
-    });
+    _server ??= HttpServer.bind(InternetAddress.loopbackIPv4, _proxyPort)
+        .catchError(
+          (Object _) => HttpServer.bind(InternetAddress.loopbackIPv4, 0),
+        )
+        .then((server) {
+          server.listen((request) => unawaited(_serve(request)));
+          _proxyPort = server.port;
+          _proxyCheckedAt = DateTime.now();
+          return server;
+        });
     try {
       return await _server!;
     } catch (_) {
@@ -695,9 +699,30 @@ class NetworkStorageService {
     }
   }
 
+  static const _proxyCheckInterval = Duration(seconds: 2);
+  DateTime _proxyCheckedAt = DateTime.fromMillisecondsSinceEpoch(0);
+  int _proxyPort = 0;
+
+  static Future<bool> _accepts(int port) async {
+    try {
+      final probe = await Socket.connect(
+        InternetAddress.loopbackIPv4,
+        port,
+        timeout: const Duration(seconds: 1),
+      );
+      probe.destroy();
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
   /// Closes the proxy as iOS does to a suspended app, keeping its routes.
   @visibleForTesting
-  Future<void> debugCloseProxy() async => (await _server)?.close(force: true);
+  Future<void> debugCloseProxy() async {
+    await (await _server)?.close(force: true);
+    _proxyCheckedAt = DateTime.fromMillisecondsSinceEpoch(0);
+  }
 
   /// Marks connection [id] out of reach, as a paired Mornye Link desktop
   /// whose session cannot connect, or reachable again. Songs of a marked

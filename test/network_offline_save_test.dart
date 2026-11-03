@@ -278,6 +278,27 @@ void main() {
     }
   });
 
+  test('a proxy closed in the background comes back on its port', () async {
+    final storage = await offlineStorage(_scanned);
+    final client = HttpClient();
+    Future<List<int>> fetch(String url) async => (await (await client.getUrl(
+      Uri.parse(url),
+    )).close()).expand((chunk) => chunk).toList();
+    try {
+      final before = await storage.resolve(_scanned);
+      expect(await fetch(before), _bytes);
+      // What iOS does to a suspended app's listening socket.
+      await storage.debugCloseProxy();
+      final after = await storage.resolve(_scanned);
+      expect(Uri.parse(after).port, Uri.parse(before).port);
+      expect(await fetch(after), _bytes);
+      expect(await fetch(before), _bytes, reason: 'earlier addresses work');
+    } finally {
+      client.close(force: true);
+      await storage.dispose();
+    }
+  });
+
   group('NetworkFileTransport', () {
     late HttpServer server;
     late int? declared;
