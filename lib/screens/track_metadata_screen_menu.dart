@@ -45,6 +45,12 @@ extension _TrackMetadataMenu on _TrackMetadataScreenState {
             else if (downloadItem != null)
               UnifiedLibraryItem.fromDownloadHistory(downloadItem),
           ]);
+    final networkSongs = networkSavableItems(ref, [
+      if (localItem != null)
+        UnifiedLibraryItem.fromLocalLibrary(localItem)
+      else if (downloadItem != null)
+        UnifiedLibraryItem.fromDownloadHistory(downloadItem),
+    ]);
     return <_MetadataOption>[
       if (_fileExists && showPlayer)
         _MetadataOption(
@@ -63,6 +69,19 @@ extension _TrackMetadataMenu on _TrackMetadataScreenState {
           icon: Icons.phone_android,
           label: l10n.linkSaveToPhone,
           onTap: () => linkSaveSongsToPhone(screenContext, ref, desktopSongs),
+        ),
+      if (networkSongs.isNotEmpty)
+        _MetadataOption(
+          icon: Icons.phone_android,
+          label: l10n.linkSaveToPhone,
+          onTap: () => networkSaveToPhone(screenContext, ref, networkSongs),
+        ),
+      if (isNetworkPhoneCopy(downloadItem))
+        _MetadataOption(
+          icon: Icons.cloud_done_outlined,
+          label: l10n.networkRemoveFromPhone,
+          onTap: () =>
+              networkRemoveFromPhone(screenContext, ref, downloadItem!),
         ),
       if (phoneSongs.isNotEmpty && linkClient != null)
         _MetadataOption(

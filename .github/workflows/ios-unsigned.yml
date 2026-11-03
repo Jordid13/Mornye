@@ -1,0 +1,79 @@
+# Fork-only: builds an unsigned IPA to sign and sideload. Mirrors ci.yml's
+# rust-ios job on a GitHub-hosted runner, without the private Discord SDK.
+name: iOS unsigned IPA
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feat/offline-network-save
+
+jobs:
+  ipa:
+    runs-on: macos-26
+    timeout-minutes: 120
+    env:
+      MORNYE_DISCORD_SDK: "0"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Select newest Xcode
+        run: |
+          ls -d /Applications/Xcode*.app
+          sudo xcode-select -s "$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)"
+          xcodebuild -version
+
+      - name: Activate pinned Rust toolchain
+        working-directory: rust_backend
+        run: rustup show
+
+      - name: Cache Cargo registry and build output
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            rust_backend/target
+          key: cargo-${{ runner.os }}-rust-ios-${{ hashFiles('rust_backend/rust-toolchain.toml') }}-${{ hashFiles('rust_backend/Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-rust-ios-${{ hashFiles('rust_backend/rust-toolchain.toml') }}-
+
+      - name: Build iOS device and universal simulator XCFramework
+        run: bash scripts/build_rust_backend.sh ios
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
+        with:
+          channel: "stable"
+          flutter-version-file: .fvmrc
+          cache: true
+
+      - name: Prepare Flutter framework patch
+        run: dart scripts/prepare_flutter_sdk.dart
+
+      - name: Test offline network saving
+        run: |
+          flutter pub get
+          flutter analyze --no-pub lib/services/network_offline_save.dart lib/widgets/network_offline_actions.dart
+          flutter test --no-pub test/network_offline_save_test.dart
+
+      - name: Configure Rust application pods
+        run: cd ios && pod install
+
+      - name: Build unsigned iOS application
+        run: flutter build ios --release --no-codesign --target lib/main.dart
+
+      - name: Package IPA
+        run: |
+          mkdir -p build/ios/ipa Payload
+          cp -R build/ios/iphoneos/Runner.app Payload/
+          zip -qr "build/ios/ipa/Mornye-offline-${GITHUB_SHA::8}-unsigned.ipa" Payload
+          ls -la build/ios/ipa
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ios-ipa
+          path: build/ios/ipa/*.ipa

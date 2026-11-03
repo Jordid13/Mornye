@@ -10230,5 +10230,43 @@
         "type": "String"
       }
     }
+  },
+  "networkSaveStarted": "{count, plural, =1{Saving {title} to this phone} other{Saving {count} songs to this phone}}",
+  "@networkSaveStarted": {
+    "description": "Snackbar when the phone starts copying songs from network storage into its download folder; title is the first song's title",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      },
+      "title": {
+        "type": "String"
+      }
+    }
+  },
+  "networkSaveFinished": "{count, plural, =1{Saved 1 song to this phone} other{Saved {count} songs to this phone}}",
+  "@networkSaveFinished": {
+    "description": "Snackbar when songs from network storage were copied to the phone",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "networkSaveFailed": "{count, plural, =1{1 song could not be saved to this phone} other{{count} songs could not be saved to this phone}}",
+  "@networkSaveFailed": {
+    "description": "Snackbar when songs from network storage could not be copied to the phone",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "networkRemoveFromPhone": "Remove from this phone",
+  "@networkRemoveFromPhone": {
+    "description": "Song menu action: delete the phone copy of a network song, keeping it on the server"
+  },
+  "networkRemovedFromPhone": "Removed from this phone. It stays on your server.",
+  "@networkRemovedFromPhone": {
+    "description": "Snackbar after removing the phone copy of a network song"
   }
 }
