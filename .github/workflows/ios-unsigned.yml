@@ -62,6 +62,22 @@ jobs:
       - name: Configure Rust application pods
         run: cd ios && pod install
 
+      # GitHub-hosted runners lack Xcode 27, whose iOS 27 SDK the Link Now
+      # Playing extension needs. Older Xcode builds the app without it.
+      - name: Leave out the iOS 27 Now Playing extension on older Xcode
+        run: |
+          major=$(xcodebuild -version | awk 'NR==1 {split($2, v, "."); print v[1]}')
+          if [ "$major" -lt 27 ]; then
+            project=ios/Runner.xcodeproj/project.pbxproj
+            for line in \
+              'A02700000000000000000024 /\* Embed Now Playing Extension \*/,' \
+              'A02700000000000000000031 /\* PBXTargetDependency \*/,'; do
+              grep -Eq "^[[:space:]]*${line}\$" "$project"
+              sed -E -i '' "\#^[[:space:]]*${line}\$#d" "$project"
+            done
+            echo "Xcode $major: built without LinkNowPlaying.appex"
+          fi
+
       - name: Build unsigned iOS application
         run: flutter build ios --release --no-codesign --target lib/main.dart
 

@@ -1,3 +1,5 @@
+// Built only with the iOS 27 SDK; see LinkNowPlayingBridge.swift.
+#if canImport(NowPlaying)
 import Foundation
 import NowPlaying
 import Security
@@ -102,3 +104,4 @@ enum LinkNowPlayingError: Error {
     case invalidResponse
     case status(Int)
 }
+#endif

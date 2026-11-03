@@ -1,6 +1,10 @@
 import CryptoKit
 import Flutter
+// The NowPlaying framework ships with the iOS 27 SDK (Xcode 27). Older
+// toolchains build the bridge without it; it then answers "not supported".
+#if canImport(NowPlaying)
 import NowPlaying
+#endif
 import UIKit
 
 /// Remote playback has its own iOS 27 session. It neither activates the
@@ -11,19 +15,22 @@ final class LinkNowPlayingBridge {
 
     init(messenger: FlutterBinaryMessenger) {
         channel = FlutterMethodChannel(name: "com.zarz.mornye/link_now_playing", binaryMessenger: messenger)
+        #if canImport(NowPlaying)
         if #available(iOS 27.0, *) {
             let controller = LinkNowPlayingController()
             channel.setMethodCallHandler { call, result in controller.handle(call, result) }
-        } else {
-            channel.setMethodCallHandler { call, result in
-                result(call.method == "supported" ? false : nil)
-            }
+            return
+        }
+        #endif
+        channel.setMethodCallHandler { call, result in
+            result(call.method == "supported" ? false : nil)
         }
     }
 
     deinit { channel.setMethodCallHandler(nil) }
 }
 
+#if canImport(NowPlaying)
 @available(iOS 27.0, *)
 @MainActor
 private final class LinkNowPlayingController {
@@ -160,3 +167,4 @@ private final class LinkNowPlayingController {
         return file.absoluteString
     }
 }
+#endif
