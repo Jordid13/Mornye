@@ -306,10 +306,20 @@ class NetworkStorageService {
 
   /// The phone copy of [source] while it is there. Copies load at startup;
   /// songs without one never wait on the disk.
-  Future<String?> offlineCopy(String source) async =>
-      _offlineCopies.copyOf(source) == null
-      ? null
-      : _offlineCopies.existingCopyOf(source);
+  Future<String?> offlineCopy(String source) async {
+    await _offlineCopies.ready;
+    return _offlineCopies.copyOf(source) == null
+        ? null
+        : _offlineCopies.existingCopyOf(source);
+  }
+
+  /// Whether [source] is saved to this device, even if its copy went
+  /// missing: the server file must then stay too.
+  Future<bool> _savedToDevice(String source) async {
+    await _offlineCopies.ready;
+    return _offlineCopies.copyOf(source) != null;
+  }
+
   static const _storage = FlutterSecureStorage(
     aOptions: secureStorageAndroidOptions,
     mOptions: secureStorageMacOsOptions,
@@ -423,6 +433,17 @@ class NetworkStorageService {
     _connections = List.unmodifiable(next);
     _routes.removeWhere((_, route) => route.id == id);
     _closeReadClients(id, force: true);
+    // Its songs leave the Library, and with them any way to remove copies.
+    for (final MapEntry(key: source, value: copy)
+        in _offlineCopies.copies.entries) {
+      if (Uri.tryParse(source)?.host != id) continue;
+      try {
+        await File(copy).delete();
+      } on FileSystemException {
+        // Already gone.
+      }
+      await _offlineCopies.remove(source);
+    }
     await connectionRemovals.publish(id);
   });
 
@@ -674,7 +695,8 @@ class NetworkStorageService {
       if (server != null &&
           (fresh || await _accepts(_proxyPort) || await _accepts(_proxyPort))) {
         if (!fresh) _proxyCheckedAt = now;
-        return server;
+        // Another caller may have restarted it meanwhile.
+        return identical(_server, running) ? server : _proxy();
       }
       if (identical(_server, running)) {
         _server = null;

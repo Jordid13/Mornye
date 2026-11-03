@@ -179,8 +179,13 @@ void main() {
       // Usually answered by now. The first frame then has the final theme,
       // with no fade from the seed colors; a late answer still applies.
       await dynamicColors.settle(const Duration(milliseconds: 100));
-      // Labels and menus ask synchronously which network songs are saved.
-      unawaited(restoreLegacyNetworkDownloads());
+      // Before the Library loads: labels and menus ask synchronously which
+      // network songs are saved, and older records must not be cached first.
+      try {
+        await restoreLegacyNetworkDownloads();
+      } on Object catch (error) {
+        debugPrint('Saved network songs not restored: $error');
+      }
 
       runApp(
         ProviderScope(

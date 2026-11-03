@@ -40,10 +40,20 @@ class NetworkOfflineOrigins {
 
   Future<void> load() => _loading ??= _read();
 
+  /// Waits for a load already started (at app start), without starting one.
+  Future<void> get ready => _loading ?? Future<void>.value();
+
+  /// Whether the last load could not read the file. Writing then would erase
+  /// every copy it lists, so writes wait for a read that works.
+  bool _unreadable = false;
+
   Future<void> _read() async {
     try {
       final documents = (await _documents()).path;
-      final json = jsonDecode(await (await _file()).readAsString());
+      final file = await _file();
+      _unreadable = false;
+      if (!await file.exists()) return;
+      final json = jsonDecode(await file.readAsString());
       if (json is! Map) return;
       json.forEach((key, value) {
         if (key is! String) return;
@@ -63,7 +73,9 @@ class NetworkOfflineOrigins {
         }
       });
     } on Object {
-      // No file yet, unreadable, or no app folders (tests): no copies.
+      // Locked before the first unlock, damaged, or no app folders (tests).
+      _unreadable = true;
+      _loading = null;
     } finally {
       revision.value++;
     }
@@ -86,6 +98,9 @@ class NetworkOfflineOrigins {
     return null;
   }
 
+  /// Every saved song and its copy.
+  Map<String, String> get copies => Map.unmodifiable(_copies);
+
   /// Download records the first builds pointed at a copy, by that copy, with
   /// the song to point them back at. Empty once [put] or [remove] runs.
   Map<String, String> get legacyDownloads => Map.unmodifiable(_legacyDownloads);
@@ -98,6 +113,9 @@ class NetworkOfflineOrigins {
   Future<void> _write(void Function() change) {
     final next = _mutation.then((_) async {
       await load();
+      if (_unreadable) {
+        throw const FileSystemException('Saved songs could not be read');
+      }
       change();
       _legacyDownloads.clear();
       final file = await _file();

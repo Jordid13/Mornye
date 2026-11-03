@@ -248,6 +248,43 @@ void main() {
     expect(jsonDecode(originsFile.readAsStringSync()), {_webdav: copy});
   });
 
+  test('an unreadable list is never overwritten, and leaves no copy', () async {
+    originsFile.writeAsStringSync('{not json');
+    final result = await saver.save([_row()]);
+
+    expect(result.failed, 1);
+    expect(originsFile.readAsStringSync(), '{not json');
+    expect(
+      Directory(
+        p.join(documents.path, 'Mornye'),
+      ).listSync(recursive: true).whereType<File>(),
+      isEmpty,
+    );
+  });
+
+  test('only the exact legacy record is pointed back', () async {
+    final copy = p.join(documents.path, 'Mornye', 'Song.flac');
+    originsFile.writeAsStringSync(
+      jsonEncode({
+        'Documents/Mornye/Song.flac': {'source': _webdav, 'restore': true},
+      }),
+    );
+    // Path keys also match this other file (same name, other extension).
+    final history = _History()
+      ..rows['other'] = {
+        'id': 'other',
+        'filePath': copy.replaceFirst('.flac', '.m4a'),
+        'storageMode': 'app',
+      };
+
+    await restoreLegacyNetworkDownloads(
+      origins: newOrigins(),
+      history: history,
+    );
+
+    expect(history.rows['other']!['storageMode'], 'app');
+  });
+
   test('a saved song plays from its copy while the server is down', () async {
     final storage = await offlineStorage(_scanned);
     final client = HttpClient();
@@ -273,6 +310,21 @@ void main() {
     try {
       expect(await storage.canDeleteFile(_scanned), isFalse);
       expect(await storage.deleteFile(_scanned), isFalse);
+      // Nor when its copy went missing: it still shows as saved.
+      await File(origins.copyOf(_scanned)!).delete();
+      expect(await storage.deleteFile(_scanned), isFalse);
+    } finally {
+      await storage.dispose();
+    }
+  });
+
+  test('removing a connection removes its copies', () async {
+    final storage = await offlineStorage(_scanned);
+    final copy = origins.copyOf(_scanned)!;
+    try {
+      await storage.remove('conn1');
+      expect(origins.isSaved(_scanned), isFalse);
+      expect(await File(copy).exists(), isFalse);
     } finally {
       await storage.dispose();
     }

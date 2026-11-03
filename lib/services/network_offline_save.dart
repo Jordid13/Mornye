@@ -148,8 +148,15 @@ class NetworkOfflineSaver {
       openTransport: openTransport,
       destination: destination,
       temporaryDirectory: temporaryDirectory,
-      record: (saved) =>
-          origins.put(sourceBySaverId[saved.id]!, saved.filePath),
+      record: (saved) async {
+        try {
+          await origins.put(sourceBySaverId[saved.id]!, saved.filePath);
+        } on Object {
+          // Unrecorded, the copy could never be found or removed.
+          await deleteLocalFile(saved.filePath);
+          rethrow;
+        }
+      },
       exists: (id) async =>
           await origins.existingCopyOf(sourceBySaverId[id]!) != null,
     );
@@ -190,11 +197,26 @@ Future<void> restoreLegacyNetworkDownloads({
   final legacy = copies.legacyDownloads;
   if (legacy.isEmpty) return;
   for (final MapEntry(key: copy, value: source) in legacy.entries) {
+    // Path keys match loosely (case, extension); only that copy's record.
     final json = await db.findByFilePath(copy);
-    if (json == null || json['filePath'] == source) continue;
+    if (json == null || !_sameDocument(json['filePath'] as String?, copy)) {
+      continue;
+    }
     await db.upsert({...json, 'filePath': source, 'storageMode': 'network'});
   }
   // Written once in the current format, without the legacy flags.
   final first = legacy.values.first;
-  await copies.put(first, copies.copyOf(first)!);
+  final copy = copies.copyOf(first);
+  if (copy != null) await copies.put(first, copy);
+}
+
+/// Whether two paths name the same file under the app's Documents, which
+/// iOS moves to a new container on updates.
+bool _sameDocument(String? recorded, String copy) {
+  String tail(String path) {
+    final index = path.indexOf('/Documents/');
+    return index < 0 ? path : path.substring(index);
+  }
+
+  return recorded != null && tail(recorded) == tail(copy);
 }

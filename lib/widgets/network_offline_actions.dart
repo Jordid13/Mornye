@@ -18,15 +18,18 @@ import 'package:mornye/widgets/selection_action_button.dart';
 
 final _log = AppLogger('NetworkOfflineSave');
 
-/// Saves network songs into the download folder the settings choose. Copies
-/// are read as plain files, so a storage-access (SAF) folder is not used.
+/// Saves network songs into the app's own `Documents/Mornye`. Copies are
+/// read back as plain files at any time, which a storage-access (SAF) tree
+/// or a folder picked in Files would not allow without its grant.
 final networkOfflineSaverProvider = Provider<NetworkOfflineSaver>((ref) {
   final settings = ref.watch(settingsProvider);
   return NetworkOfflineSaver(
     destination: LinkDownloadFolderDestination(
-      settings.storageMode == 'saf'
-          ? settings.copyWith(storageMode: 'app')
-          : settings,
+      settings.copyWith(
+        storageMode: 'app',
+        downloadDirectory: '',
+        downloadDirectoryBookmark: '',
+      ),
     ),
     deleteLocalFile: deleteFile,
     temporaryDirectory: getTemporaryDirectory,
