@@ -278,6 +278,44 @@ void main() {
     },
   );
 
+  test('a proxy closed in the background is started again', () async {
+    final copy = File(p.join(documents.path, 'Mornye', 'Band', 'Song.flac'));
+    await copy.parent.create(recursive: true);
+    await copy.writeAsBytes(_bytes);
+    final origins = NetworkOfflineOrigins(
+      file: () async => originsFile,
+      documents: () async => documents,
+    );
+    final storage = NetworkStorageService(
+      read: () async => jsonEncode([
+        const NetworkConnection(
+          id: 'conn9',
+          name: 'nas',
+          protocol: NetworkProtocol.webdav,
+          address: 'http://127.0.0.1:1/',
+        ).toJson(),
+      ]),
+      write: (_) async {},
+      ensureAccess: (_) async {},
+      offlineCopies: origins,
+    );
+    final source = NetworkStorageService.source('conn9', 'Band/Song.flac');
+    await origins.put(copy.path, NetworkOrigin(source, restore: false));
+    final client = HttpClient();
+    Future<List<int>> fetch(String url) async => (await (await client.getUrl(
+      Uri.parse(url),
+    )).close()).expand((chunk) => chunk).toList();
+    try {
+      expect(await fetch(await storage.resolve(source)), _bytes);
+      // What iOS does to a suspended app's listening socket.
+      await storage.debugCloseProxy();
+      expect(await fetch(await storage.resolve(source)), _bytes);
+    } finally {
+      client.close(force: true);
+      await storage.dispose();
+    }
+  });
+
   group('NetworkFileTransport', () {
     late HttpServer server;
     late List<int> body;

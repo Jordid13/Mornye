@@ -180,6 +180,7 @@ class NetworkOfflineSaver {
               safFileName: saved.safFileName,
             ),
           );
+          origins.recordChanged();
         }
       },
       exists: (id) => origins.hasCopyOf(bySaverId[id]!.filePath),

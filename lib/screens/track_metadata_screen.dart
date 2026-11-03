@@ -69,6 +69,7 @@ import 'package:mornye/widgets/album_detail_header.dart'
     show HeaderMetaRow, HeaderMetaItem, HeaderCircleButton, HeaderFilledButton;
 import 'package:mornye/widgets/desktop/context_menu.dart';
 import 'package:mornye/widgets/link/link_actions.dart';
+import 'package:mornye/services/history_database.dart';
 import 'package:mornye/services/network_offline_origins.dart';
 import 'package:mornye/widgets/network_offline_actions.dart';
 import 'package:mornye/widgets/link/link_library_actions.dart';
@@ -182,7 +183,11 @@ class _TrackMetadataScreenState extends ConsumerState<TrackMetadataScreen>
   bool get _fileExists => _fileAccess is FileAccessFound;
   bool get _isNetworkItem => cleanFilePath.startsWith('network://');
   bool _networkFileDeletable = false;
-  bool get _canDeleteFile => !_isNetworkItem || _networkFileDeletable;
+  // A network song saved to this device offers "Remove from this phone"
+  // instead, so the red Delete cannot be mistaken for removing the copy.
+  bool get _canDeleteFile =>
+      !_isNetworkItem ||
+      (_networkFileDeletable && !hasNetworkPhoneCopy(cleanFilePath));
   bool _isDeleting = false;
   int? get _fileSize => switch (_fileAccess) {
     FileAccessFound(:final stat) => stat.size,
@@ -232,6 +237,7 @@ class _TrackMetadataScreenState extends ConsumerState<TrackMetadataScreen>
     _currentDownloadItem = widget.item;
     _currentLocalLibraryItem = widget.localItem;
     _currentNavigationIndex = widget.navigationIndex;
+    NetworkOfflineOrigins.instance.revision.addListener(_followNetworkCopy);
     _unsubscribeMetadata = SourceMetadataEvents.instance.subscribe((
       source,
     ) async {
@@ -265,6 +271,7 @@ class _TrackMetadataScreenState extends ConsumerState<TrackMetadataScreen>
 
   @override
   void dispose() {
+    NetworkOfflineOrigins.instance.revision.removeListener(_followNetworkCopy);
     _unsubscribeMetadata();
     _unsubscribeDeletion();
     unawaited(_cleanupTempFileAndParentIfNotCached(_embeddedCoverPreviewPath));
@@ -285,6 +292,23 @@ class _TrackMetadataScreenState extends ConsumerState<TrackMetadataScreen>
       return (mediaSize.height * 0.62).clamp(440.0, 640.0);
     }
     return (mediaSize.height * 0.55).clamp(360.0, 520.0);
+  }
+
+  /// Saving or removing a phone copy moves a download's file; follow the
+  /// record, so this screen never checks a file that is gone.
+  Future<void> _followNetworkCopy() async {
+    final shown = _downloadItem;
+    if (shown == null) return;
+    final json = await HistoryDatabase.instance.getById(shown.id);
+    if (!mounted || json == null || _downloadItem?.id != shown.id) return;
+    final current = DownloadHistoryItem.fromJson(json);
+    if (current.filePath == shown.filePath) return;
+    setState(() {
+      _currentDownloadItem = current;
+      _metadataLoadGeneration++;
+      _hasLoadedResolvedAudioMetadata = false;
+    });
+    await _checkFile();
   }
 
   Future<void> _checkFile() async {

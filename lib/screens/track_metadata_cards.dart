@@ -27,11 +27,17 @@ extension _TrackMetadataCards on _TrackMetadataScreenState {
     if (_displayAudioQuality != null && _displayAudioQuality!.isNotEmpty)
       HeaderMetaItem(_displayAudioQuality!),
     if (duration != null) HeaderMetaItem(formatClock(duration!)),
-    if (_service == 'local' && cleanFilePath.startsWith('network://'))
+    if (_service.isNotEmpty && _service != 'local')
+      HeaderMetaItem(_service[0].toUpperCase() + _service.substring(1)),
+    if (_isNetworkItem || isNetworkPhoneCopy(_downloadItem))
       // Where a network song is: on this device as a copy, or on the server.
+      // Live, so saving or removing the copy shows here at once.
       ValueListenableBuilder<int>(
         valueListenable: NetworkOfflineOrigins.instance.revision,
-        builder: (context, _, _) => hasNetworkPhoneCopy(cleanFilePath)
+        builder: (context, _, _) =>
+            (_isNetworkItem
+                ? hasNetworkPhoneCopy(cleanFilePath)
+                : isNetworkPhoneCopy(_downloadItem))
             ? HeaderMetaItem(
                 context.l10n.librarySourceDownloaded,
                 icon: context.isMornye
@@ -49,9 +55,7 @@ extension _TrackMetadataCards on _TrackMetadataScreenState {
       HeaderMetaItem(
         context.l10n.librarySourceLocal,
         icon: context.isMornye ? CupertinoIcons.folder : Icons.folder,
-      )
-    else if (_service.isNotEmpty)
-      HeaderMetaItem(_service[0].toUpperCase() + _service.substring(1)),
+      ),
   ];
 
   Widget _buildAnimatedTrackContent(

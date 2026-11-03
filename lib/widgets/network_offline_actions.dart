@@ -7,6 +7,7 @@ import 'package:mornye/l10n/l10n.dart';
 import 'package:mornye/models/unified_library_item.dart';
 import 'package:mornye/providers/download_history_provider.dart';
 import 'package:mornye/providers/settings_provider.dart';
+import 'package:mornye/services/history_database.dart';
 import 'package:mornye/services/link/features/link_phone_client.dart';
 import 'package:mornye/services/link/features/link_save_offline.dart';
 import 'package:mornye/services/link/features/link_track_refs.dart';
@@ -118,10 +119,50 @@ Future<void> networkRemoveCopy(
   }
 }
 
+/// "Remove from this phone" for selected songs: deletes their phone copies,
+/// keeping the songs on the server.
+Future<void> networkRemoveSelected(
+  BuildContext context,
+  WidgetRef ref,
+  List<UnifiedLibraryItem> items,
+) async {
+  final l10n = context.l10n;
+  final saver = ref.read(networkOfflineSaverProvider);
+  var removed = 0;
+  for (final item in items) {
+    final download = item.historyItem;
+    final done = download != null && isNetworkPhoneCopy(download)
+        ? await saver.remove(download)
+        : await saver.removeCopyOf(item.filePath);
+    if (done) removed++;
+  }
+  if (removed == 0) return;
+  _refreshLibrary(ref);
+  if (context.mounted) {
+    showAppSnackBar(context, content: Text(l10n.networkRemovedFromPhone));
+  }
+}
+
 /// Whether [item] is a phone copy of a network song.
 bool isNetworkPhoneCopy(DownloadHistoryItem? item) =>
     item != null &&
     NetworkOfflineOrigins.instance.cached(item.filePath) != null;
+
+/// "Remove from this phone" for the download with history id [id], as it
+/// is recorded now: a screen may still hold it from before it was saved.
+Future<void> networkRemoveDownloadCopy(
+  BuildContext context,
+  WidgetRef ref,
+  String id,
+) async {
+  final json = await HistoryDatabase.instance.getById(id);
+  if (json == null || !context.mounted) return;
+  await networkRemoveFromPhone(
+    context,
+    ref,
+    DownloadHistoryItem.fromJson(json),
+  );
+}
 
 /// "Remove from this phone": deletes the phone copy [item] records, keeping
 /// the song on the server.
@@ -146,16 +187,34 @@ List<Widget> networkSaveSelectionActions(
   required VoidCallback onClose,
 }) {
   final songs = networkSavableItems(ref, items);
-  if (songs.isEmpty) return const [];
+  final saved = [
+    for (final item in items)
+      if (hasNetworkPhoneCopy(item.filePath) ||
+          isNetworkPhoneCopy(item.historyItem))
+        item,
+  ];
+  final colors = Theme.of(context).colorScheme;
   return [
-    SelectionActionButton(
-      icon: Icons.phone_android,
-      label: context.l10n.linkSaveToPhone,
-      colorScheme: Theme.of(context).colorScheme,
-      onPressed: () {
-        networkSaveToPhone(context, ref, songs);
-        onClose();
-      },
-    ),
+    if (songs.isNotEmpty)
+      SelectionActionButton(
+        icon: Icons.phone_android,
+        label: context.l10n.linkSaveToPhone,
+        colorScheme: colors,
+        onPressed: () {
+          networkSaveToPhone(context, ref, songs);
+          onClose();
+        },
+      ),
+    if (saved.isNotEmpty)
+      SelectionActionButton(
+        icon: Icons.cloud_done_outlined,
+        label: context.l10n.networkRemoveFromPhone,
+        colorScheme: colors,
+        onPressed: () {
+          final root = Navigator.of(context, rootNavigator: true).context;
+          onClose();
+          unawaited(networkRemoveSelected(root, ref, saved));
+        },
+      ),
   ];
 }

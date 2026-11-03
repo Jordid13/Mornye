@@ -109,6 +109,9 @@ class NetworkOfflineOrigins {
     for (final entry in (await load()).entries) _path(entry.key): entry.value,
   };
 
+  /// Tells views a copy's record changed after the copy itself was noted.
+  void recordChanged() => revision.value++;
+
   Future<void> put(String path, NetworkOrigin origin) =>
       _write((entries) => entries[_key(path)] = origin);
 

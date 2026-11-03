@@ -1047,12 +1047,10 @@ extension _QueueTabItemWidgets on _QueueTabState {
     final isDownloaded = item.source == LibraryItemSource.downloaded;
     final quality = item.qualityForMode(_libraryQualityLabelMode);
     // Where the file is: streamed from network storage, or on this device.
-    final sourceLabel =
-        item.filePath.startsWith('network://') &&
-            NetworkOfflineOrigins.instance.cachedCopyOf(item.filePath) == null
-        ? context.l10n.librarySourceServer
-        : item.filePath.startsWith('network://')
-        ? context.l10n.librarySourceDownloaded
+    String sourceLabel() => item.filePath.startsWith('network://')
+        ? NetworkOfflineOrigins.instance.cachedCopyOf(item.filePath) == null
+              ? context.l10n.librarySourceServer
+              : context.l10n.librarySourceDownloaded
         : isDownloaded
         ? context.l10n.librarySourceDownloaded
         : context.l10n.librarySourceLocal;
@@ -1104,12 +1102,16 @@ extension _QueueTabItemWidgets on _QueueTabState {
                     color: sourceColor,
                     borderRadius: context.tokens.borderRadiusBadge,
                   ),
-                  child: Text(
-                    sourceLabel,
-                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                      color: sourceTextColor,
-                      fontSize: context.tokens.badgeFontSize,
-                      fontWeight: FontWeight.w500,
+                  // Saving or removing a phone copy changes it at once.
+                  child: ValueListenableBuilder<int>(
+                    valueListenable: NetworkOfflineOrigins.instance.revision,
+                    builder: (context, _, _) => Text(
+                      sourceLabel(),
+                      style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                        color: sourceTextColor,
+                        fontSize: context.tokens.badgeFontSize,
+                        fontWeight: FontWeight.w500,
+                      ),
                     ),
                   ),
                 ),

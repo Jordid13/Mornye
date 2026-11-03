@@ -639,17 +639,7 @@ class NetworkStorageService {
     if (await _offlineCopies.copyOf(source) == null) {
       await _readyConnection(host, path);
     }
-    _server ??= HttpServer.bind(InternetAddress.loopbackIPv4, 0).then((server) {
-      server.listen((request) => unawaited(_serve(request)));
-      return server;
-    });
-    final HttpServer server;
-    try {
-      server = await _server!;
-    } catch (_) {
-      _server = null;
-      rethrow;
-    }
+    final server = await _proxy();
     final token = newId();
     while (_routes.length >= 256) {
       _routes.remove(_routes.keys.first);
@@ -657,6 +647,50 @@ class NetworkStorageService {
     _routes[token] = (id: host, path: path, source: source);
     return 'http://127.0.0.1:${server.port}/$token';
   }
+
+  /// The loopback proxy songs play through. iOS can close its listening
+  /// socket while the app is suspended in the background; a proxy that no
+  /// longer accepts connections is started again, instead of every song
+  /// failing until the app restarts. Routes outlive it.
+  Future<HttpServer> _proxy() async {
+    final running = _server;
+    if (running != null) {
+      HttpServer? server;
+      try {
+        server = await running;
+        final probe = await Socket.connect(
+          InternetAddress.loopbackIPv4,
+          server.port,
+          timeout: const Duration(seconds: 1),
+        );
+        probe.destroy();
+        return server;
+      } catch (_) {
+        if (identical(_server, running)) _server = null;
+        try {
+          await server?.close(force: true);
+        } catch (_) {}
+      }
+    }
+    _server ??= HttpServer.bind(InternetAddress.loopbackIPv4, 0).then((server) {
+      server.listen(
+        (request) => unawaited(_serve(request)),
+        // A reclaimed socket can end the stream with an error.
+        onError: (Object _) {},
+      );
+      return server;
+    });
+    try {
+      return await _server!;
+    } catch (_) {
+      _server = null;
+      rethrow;
+    }
+  }
+
+  /// Closes the proxy as iOS does to a suspended app, keeping its routes.
+  @visibleForTesting
+  Future<void> debugCloseProxy() async => (await _server)?.close(force: true);
 
   /// Marks connection [id] out of reach, as a paired Mornye Link desktop
   /// whose session cannot connect, or reachable again. Songs of a marked
