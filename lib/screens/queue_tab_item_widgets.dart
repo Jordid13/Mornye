@@ -1046,12 +1046,7 @@ extension _QueueTabItemWidgets on _QueueTabState {
 
     final isDownloaded = item.source == LibraryItemSource.downloaded;
     final quality = item.qualityForMode(_libraryQualityLabelMode);
-    // Where the file is: streamed from network storage, or on this device.
-    String sourceLabel() => item.filePath.startsWith('network://')
-        ? NetworkOfflineOrigins.instance.cachedCopyOf(item.filePath) == null
-              ? context.l10n.librarySourceServer
-              : context.l10n.librarySourceDownloaded
-        : isDownloaded
+    final sourceLabel = isDownloaded
         ? context.l10n.librarySourceDownloaded
         : context.l10n.librarySourceLocal;
     // The label text tells the sources apart; rows keep one neutral role.
@@ -1102,11 +1097,11 @@ extension _QueueTabItemWidgets on _QueueTabState {
                     color: sourceColor,
                     borderRadius: context.tokens.borderRadiusBadge,
                   ),
-                  // Saving or removing a phone copy changes it at once.
-                  child: ValueListenableBuilder<int>(
-                    valueListenable: NetworkOfflineOrigins.instance.revision,
-                    builder: (context, _, _) => Text(
-                      sourceLabel(),
+                  child: NetworkCopyBuilder(
+                    path: item.filePath,
+                    builder: (context, saved) => Text(
+                      networkLocationLabel(context, item.filePath, saved) ??
+                          sourceLabel,
                       style: Theme.of(context).textTheme.labelSmall?.copyWith(
                         color: sourceTextColor,
                         fontSize: context.tokens.badgeFontSize,

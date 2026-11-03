@@ -3,7 +3,6 @@ import 'dart:io';
 import 'package:open_filex/open_filex.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:url_launcher/url_launcher.dart';
-import 'package:mornye/services/network_offline_origins.dart';
 import 'package:mornye/services/network_storage_service.dart';
 import 'package:mornye/services/platform_bridge.dart';
 import 'package:mornye/services/source_deletion_events.dart';
@@ -382,11 +381,6 @@ Future<bool> deleteFile(
   bool confirmedAbsent;
   try {
     if (path.startsWith('network://')) {
-      // A song saved to this device shows as "Downloaded": deleting it must
-      // never reach the server. Remove the phone copy first.
-      if (NetworkOfflineOrigins.instance.cachedCopyOf(path) != null) {
-        return false;
-      }
       confirmedAbsent = await (networkStorage ?? NetworkStorageService.instance)
           .deleteFile(path);
     } else if (isContentUri(path)) {

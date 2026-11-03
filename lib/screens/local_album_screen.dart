@@ -52,7 +52,6 @@ import 'package:mornye/widgets/disc_separator_chip.dart';
 import 'package:mornye/widgets/album_detail_header.dart';
 import 'package:mornye/widgets/mornye_artist_header.dart';
 import 'package:mornye/widgets/motion_header_banner.dart';
-import 'package:mornye/services/network_offline_origins.dart';
 import 'package:mornye/widgets/network_offline_actions.dart';
 
 class LocalAlbumScreen extends ConsumerStatefulWidget {
@@ -719,36 +718,37 @@ class _LocalAlbumScreenState extends ConsumerState<LocalAlbumScreen>
           isPlaying: isPlaying,
           trackNumber: track.trackNumber,
           trackName: track.trackName,
-          subtitle: ValueListenableBuilder<int>(
-            valueListenable: NetworkOfflineOrigins.instance.revision,
-            builder: (context, _, _) => Row(
-              children: [
-                // Saved to this device: plays offline.
-                if (hasNetworkPhoneCopy(track.filePath)) ...[
-                  Icon(
-                    Icons.download_done_rounded,
-                    size: 14,
-                    color: Theme.of(context).colorScheme.primary,
-                    semanticLabel: context.l10n.librarySourceDownloaded,
-                  ),
-                  const SizedBox(width: 4),
-                ],
-                Flexible(
-                  child: Text(
-                    track.artistName,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
+          subtitle: Row(
+            children: [
+              NetworkCopyBuilder(
+                path: track.filePath,
+                builder: (context, saved) => saved
+                    ? Padding(
+                        padding: const EdgeInsets.only(right: 4),
+                        child: Icon(
+                          Icons.download_done_rounded,
+                          size: 14,
+                          color: Theme.of(context).colorScheme.primary,
+                          semanticLabel: context.l10n.librarySourceDownloaded,
+                        ),
+                      )
+                    : const SizedBox.shrink(),
+              ),
+              Flexible(
+                child: Text(
+                  track.artistName,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                 ),
-                if (track.format != null) ...[
-                  const Text(' • ', style: TextStyle(fontSize: 12)),
-                  Text(
-                    track.format!.toUpperCase(),
-                    style: const TextStyle(fontSize: 12),
-                  ),
-                ],
+              ),
+              if (track.format != null) ...[
+                const Text(' • ', style: TextStyle(fontSize: 12)),
+                Text(
+                  track.format!.toUpperCase(),
+                  style: const TextStyle(fontSize: 12),
+                ),
               ],
-            ),
+            ],
           ),
           isSelectionMode: isSelectionMode,
           isSelected: selectedIds.contains(track.id),

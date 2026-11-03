@@ -76,23 +76,12 @@ extension _TrackMetadataMenu on _TrackMetadataScreenState {
           label: l10n.linkSaveToPhone,
           onTap: () => networkSaveToPhone(screenContext, ref, networkSongs),
         ),
-      if (localItem != null && hasNetworkPhoneCopy(localItem.filePath))
+      if (NetworkOfflineOrigins.instance.isSaved(cleanFilePath))
         _MetadataOption(
           icon: Icons.cloud_done_outlined,
           label: l10n.networkRemoveFromPhone,
           onTap: () =>
-              networkRemoveCopy(screenContext, ref, localItem.filePath),
-        ),
-      // A download saved while this screen was open still names its server
-      // file; the copy is found either way.
-      if (downloadItem != null &&
-          (isNetworkPhoneCopy(downloadItem) ||
-              hasNetworkPhoneCopy(downloadItem.filePath)))
-        _MetadataOption(
-          icon: Icons.cloud_done_outlined,
-          label: l10n.networkRemoveFromPhone,
-          onTap: () =>
-              networkRemoveDownloadCopy(screenContext, ref, downloadItem.id),
+              networkRemoveFromPhone(screenContext, ref, [cleanFilePath]),
         ),
       if (phoneSongs.isNotEmpty && linkClient != null)
         _MetadataOption(

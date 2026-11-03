@@ -136,7 +136,9 @@ class NetworkMetadataService {
     }
     final connection = await _storage.connection(uri.host);
     final path = uri.pathSegments.join('/');
-    if (connection.protocol == NetworkProtocol.subsonic) {
+    // A saved copy is read like any network file, offline too.
+    if (connection.protocol == NetworkProtocol.subsonic &&
+        await _storage.offlineCopy(source) == null) {
       final client = _storage.openSubsonic(connection);
       _subsonicClients.add(client);
       try {

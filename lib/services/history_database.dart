@@ -7,7 +7,6 @@ import 'package:mornye/services/sqlite_helpers.dart' as sqlite;
 import 'package:mornye/services/history_maintenance.dart';
 import 'package:mornye/services/history_row_mapper.dart';
 import 'package:mornye/services/history_schema.dart';
-import 'package:mornye/services/network_offline_origins.dart';
 import 'package:mornye/utils/isrc_utils.dart' as isrc;
 import 'package:mornye/utils/ios_container_paths.dart';
 import 'package:mornye/utils/logger.dart';
@@ -119,8 +118,6 @@ class HistoryDatabase {
 
   Future<Database> get database {
     return _database.getOrCreate(() async {
-      // Every path-key write, from the first one, needs the phone copies.
-      await NetworkOfflineOrigins.instance.load();
       final db = await sqlite.openAppDatabase(
         'history.db',
         version: schemaVersion,
@@ -185,63 +182,8 @@ class HistoryDatabase {
     return candidates.toList(growable: false);
   }
 
-  void _putPathKeysInBatch(Batch batch, String id, String? filePath) {
-    sqlite.putPathKeysInBatch(batch, 'history_path_keys', id, filePath);
-    // A phone copy of a network song also stands for its server file, so the
-    // Library lists one entry and a rescan leaves that file to History.
-    final origin = filePath == null
-        ? null
-        : NetworkOfflineOrigins.instance.cached(filePath);
-    if (origin != null && origin.restore) {
-      sqlite.putPathKeysInBatch(
-        batch,
-        'history_path_keys',
-        id,
-        origin.source,
-        replaceExisting: false,
-      );
-    }
-  }
-
-  /// Brings records of phone copies in [copies] up to date: a network
-  /// download's copy also gets its server file's keys, and a record an older
-  /// build made for a scanned song's copy goes, since that song's Library row
-  /// now plays the copy itself.
-  Future<void> adoptNetworkCopies(Map<String, NetworkOrigin> copies) async {
-    if (copies.isEmpty) return;
-    final db = await database;
-    await db.transaction((txn) async {
-      final batch = txn.batch();
-      final stale = <String>[];
-      for (final copy in copies.entries) {
-        final ids = await sqlite.findPhysicalFileRowIds(txn, 'history', [
-          copy.key,
-        ]);
-        if (!copy.value.restore) {
-          stale.addAll(ids);
-          continue;
-        }
-        for (final id in ids) {
-          sqlite.putPathKeysInBatch(
-            batch,
-            'history_path_keys',
-            id,
-            copy.value.source,
-            replaceExisting: false,
-          );
-        }
-      }
-      for (final id in stale) {
-        batch.delete(
-          'history_path_keys',
-          where: 'item_id = ?',
-          whereArgs: [id],
-        );
-        batch.delete('history', where: 'id = ?', whereArgs: [id]);
-      }
-      await batch.commit(noResult: true);
-    });
-  }
+  void _putPathKeysInBatch(Batch batch, String id, String? filePath) =>
+      sqlite.putPathKeysInBatch(batch, 'history_path_keys', id, filePath);
 
   Future<void> _initContainerPath() async {
     if (!Platform.isIOS || _currentContainerPath != null) return;

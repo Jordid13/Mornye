@@ -1,8 +1,8 @@
 import 'dart:io';
 
-import 'package:mornye/models/download_history.dart';
 import 'package:mornye/models/library_database_models.dart';
 import 'package:mornye/models/unified_library_item.dart';
+import 'package:mornye/services/history_database.dart';
 import 'package:mornye/services/link/features/link_save_offline.dart';
 import 'package:mornye/services/network_offline_origins.dart';
 import 'package:mornye/services/network_storage_service.dart';
@@ -10,15 +10,11 @@ import 'package:mornye/services/network_storage_service.dart';
 export 'package:mornye/services/network_offline_origins.dart';
 
 /// Saves songs that stream from network storage (`network://`: WebDAV, SMB,
-/// HTTP, Subsonic) to this phone, with the same saver as Mornye Link's
-/// "Save to this phone": the original file goes into the download folder.
-/// [NetworkOfflineOrigins] remembers which song each copy came from.
-///
-/// A scanned song keeps its Library row; [NetworkStorageService] then serves
-/// it from the copy, offline too, so albums and artists stay whole. A
-/// network download's history record (one published to the network
-/// destination) points at the copy instead, and "Remove from this phone"
-/// points it back. The server file is never changed.
+/// HTTP) to this phone, with the same saver as Mornye Link's "Save to this
+/// phone": the original file goes into the download folder and
+/// [NetworkOfflineOrigins] notes it. The song's Library row or download
+/// record stays as it is; [NetworkStorageService] serves it from the copy.
+/// The server file is never changed.
 
 /// Fetches a network song's original file through [NetworkStorageService]'s
 /// proxy, with its credentials and trusted certificate.
@@ -126,8 +122,6 @@ LocalLibraryItem _songOf(UnifiedLibraryItem item) {
 class NetworkOfflineSaver {
   NetworkOfflineSaver({
     required this.destination,
-    required this.record,
-    required this.forget,
     required this.deleteLocalFile,
     required this.temporaryDirectory,
     NetworkOfflineOrigins? origins,
@@ -136,12 +130,6 @@ class NetworkOfflineSaver {
        openTransport = openTransport ?? NetworkFileTransport.new;
 
   final LinkOfflineDestination destination;
-
-  /// Adds or replaces a history record.
-  final Future<void> Function(DownloadHistoryItem item) record;
-
-  /// Removes the history record with this id.
-  final Future<void> Function(String id) forget;
   final Future<bool> Function(String path) deleteLocalFile;
   final Future<Directory> Function() temporaryDirectory;
   final NetworkOfflineOrigins origins;
@@ -154,39 +142,19 @@ class NetworkOfflineSaver {
     LinkOfflineCancel? cancel,
   }) {
     final songs = networkSongItems(items);
-    final bySaverId = <String, UnifiedLibraryItem>{};
+    final sourceBySaverId = <String, String>{};
     final saver = LinkOfflineSaver(
       serverId: 'network',
       openTransport: openTransport,
       destination: destination,
       temporaryDirectory: temporaryDirectory,
-      record: (saved) async {
-        final item = bySaverId[saved.id]!;
-        final download = item.historyItem;
-        // Known before the record is written, so its keys include the song.
-        await origins.put(
-          saved.filePath,
-          NetworkOrigin(item.filePath, restore: download != null),
-        );
-        // A network download's record now points at the phone copy. A
-        // scanned song keeps its Library row, which then plays the copy.
-        if (download != null) {
-          await record(
-            download.copyWith(
-              filePath: saved.filePath,
-              storageMode: saved.storageMode,
-              downloadTreeUri: saved.downloadTreeUri,
-              safRelativeDir: saved.safRelativeDir,
-              safFileName: saved.safFileName,
-            ),
-          );
-          origins.recordChanged();
-        }
-      },
-      exists: (id) => origins.hasCopyOf(bySaverId[id]!.filePath),
+      record: (saved) =>
+          origins.put(sourceBySaverId[saved.id]!, saved.filePath),
+      exists: (id) async =>
+          await origins.existingCopyOf(sourceBySaverId[id]!) != null,
     );
     for (final item in songs) {
-      bySaverId[saver.historyId(item.filePath)] = item;
+      sourceBySaverId[saver.historyId(item.filePath)] = item.filePath;
     }
     return saver.save(
       [
@@ -198,30 +166,35 @@ class NetworkOfflineSaver {
     );
   }
 
-  /// Deletes the phone copy of the scanned network song [source], keeping
-  /// the server file. Returns false when it has none.
-  Future<bool> removeCopyOf(String source) async {
+  /// Deletes the phone copy of [source], keeping the song on the server.
+  /// Returns false when it has none or the copy stays.
+  Future<bool> remove(String source) async {
     await origins.load();
-    final path = origins.cachedCopyOf(source);
-    if (path == null) return false;
-    if (await File(path).exists() && !await deleteLocalFile(path)) return false;
-    await origins.remove(path);
+    final copy = origins.copyOf(source);
+    if (copy == null) return false;
+    if (await File(copy).exists() && !await deleteLocalFile(copy)) return false;
+    await origins.remove(source);
     return true;
   }
+}
 
-  /// Deletes the phone copy [item] records, keeping the server file. Returns
-  /// false when [item] is not a copy of a network song or stays.
-  Future<bool> remove(DownloadHistoryItem item) async {
-    final origin = await origins.of(item.filePath);
-    if (origin == null || !await deleteLocalFile(item.filePath)) return false;
-    if (origin.restore) {
-      await record(
-        item.copyWith(filePath: origin.source, storageMode: 'network'),
-      );
-    } else {
-      await forget(item.id);
-    }
-    await origins.remove(item.filePath);
-    return true;
+/// Points download records the first builds moved onto a phone copy back at
+/// their network song, which now plays the copy itself.
+Future<void> restoreLegacyNetworkDownloads({
+  NetworkOfflineOrigins? origins,
+  HistoryDatabase? history,
+}) async {
+  final copies = origins ?? NetworkOfflineOrigins.instance;
+  final db = history ?? HistoryDatabase.instance;
+  await copies.load();
+  final legacy = copies.legacyDownloads;
+  if (legacy.isEmpty) return;
+  for (final MapEntry(key: copy, value: source) in legacy.entries) {
+    final json = await db.findByFilePath(copy);
+    if (json == null || json['filePath'] == source) continue;
+    await db.upsert({...json, 'filePath': source, 'storageMode': 'network'});
   }
+  // Written once in the current format, without the legacy flags.
+  final first = legacy.values.first;
+  await copies.put(first, copies.copyOf(first)!);
 }

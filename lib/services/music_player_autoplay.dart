@@ -70,8 +70,10 @@ Future<List<PlayableMedia>> loadAutoplayLibrary(
   final seen = <String>{};
   // One answer per network host.
   final reachable = <String, Future<bool>>{};
-  Future<bool> networkReachable(String source) =>
-      reachable.putIfAbsent(Uri.tryParse(source)?.host ?? '', () async {
+  // Reachability is cached per server, but a saved song plays offline.
+  Future<bool> networkReachable(String source) async =>
+      NetworkOfflineOrigins.instance.isSaved(source) ||
+      await reachable.putIfAbsent(Uri.tryParse(source)?.host ?? '', () async {
         try {
           return await runtime.dependencies.networkSourceReachable(source);
         } catch (_) {

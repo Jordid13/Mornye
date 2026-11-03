@@ -4,22 +4,12 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
+import 'package:mornye/utils/ios_container_paths.dart';
 
-/// Where a phone copy came from.
-class NetworkOrigin {
-  const NetworkOrigin(this.source, {required this.restore});
-
-  /// The `network://` song the copy was saved from.
-  final String source;
-
-  /// Whether removing the copy points its history record back at [source]
-  /// (it was a network download's record) instead of deleting the record.
-  final bool restore;
-}
-
-/// Phone copies and the network songs they came from, kept in their own
-/// file beside the download history, so the history schema stays upstream's
-/// and an official build simply ignores it.
+/// Network songs saved to this device: each `network://` song and its phone
+/// copy. A saved song keeps its Library row and download record;
+/// [NetworkStorageService] serves it from the copy, offline too. Kept in its
+/// own file, so an official build simply ignores it.
 class NetworkOfflineOrigins {
   NetworkOfflineOrigins({
     Future<File> Function()? file,
@@ -31,12 +21,15 @@ class NetworkOfflineOrigins {
 
   final Future<File> Function() _file;
   final Future<Directory> Function() _documents;
-  Map<String, NetworkOrigin>? _entries;
-  String? _container;
 
-  /// Moves on whenever a copy is saved or removed, for views that show it.
-  final revision = ValueNotifier<int>(0);
+  /// Copy path by song.
+  final _copies = <String, String>{};
+  final _legacyDownloads = <String, String>{};
+  Future<void>? _loading;
   Future<void> _mutation = Future.value();
+
+  /// Moves on whenever copies load, or one is saved or removed.
+  final revision = ValueNotifier<int>(0);
 
   static Future<File> _defaultFile() async => File(
     p.join(
@@ -45,95 +38,72 @@ class NetworkOfflineOrigins {
     ),
   );
 
-  /// iOS moves the app's container on updates, so copies under Documents
-  /// are keyed relative to it.
-  static String _key(String path) {
-    final index = path.indexOf('/Documents/');
-    return index < 0 ? path : path.substring(index + 1);
-  }
+  Future<void> load() => _loading ??= _read();
 
-  String _path(String key) => key.startsWith('Documents/') && _container != null
-      ? p.join(_container!, key)
-      : key;
-
-  Future<Map<String, NetworkOrigin>> load() async {
-    final loaded = _entries;
-    if (loaded != null) return loaded;
-    final entries = <String, NetworkOrigin>{};
+  Future<void> _read() async {
     try {
-      _container ??= (await _documents()).parent.path;
+      final documents = (await _documents()).path;
       final json = jsonDecode(await (await _file()).readAsString());
-      if (json is Map) {
-        json.forEach((key, value) {
-          if (key is! String || value is! Map) return;
-          final source = value['source'];
-          if (source is String) {
-            entries[key] = NetworkOrigin(
-              source,
-              restore: value['restore'] == true,
-            );
+      if (json is! Map) return;
+      json.forEach((key, value) {
+        if (key is! String) return;
+        if (value is String) {
+          // iOS moves the app's container on updates.
+          _copies[key] = rebaseIosSandboxPath(value, documents);
+        } else if (value is Map && value['source'] is String) {
+          // The first builds keyed copies by a Documents-relative path, and
+          // pointed a saved download's record at its copy ("restore").
+          final copy = key.startsWith('Documents/')
+              ? p.join(p.dirname(documents), key)
+              : rebaseIosSandboxPath(key, documents);
+          _copies[value['source'] as String] = copy;
+          if (value['restore'] == true) {
+            _legacyDownloads[copy] = value['source'] as String;
           }
-        });
-      }
+        }
+      });
     } on Object {
       // No file yet, unreadable, or no app folders (tests): no copies.
+    } finally {
+      revision.value++;
     }
-    return _entries ??= entries;
   }
 
-  /// The origin of the phone copy at [path], once [load] has run.
-  NetworkOrigin? cached(String path) => _entries?[_key(path)];
+  /// The phone copy of the network song [source], once [load] has run.
+  String? copyOf(String source) => _copies[source];
 
-  Future<NetworkOrigin?> of(String path) async => (await load())[_key(path)];
+  /// Whether the song at [path] is a network song saved to this device.
+  bool isSaved(String path) => _copies.containsKey(path);
 
-  /// Where the phone copy of [source] is, once [load] has run.
-  String? cachedCopyOf(String source) {
-    for (final entry in (_entries ?? const <String, NetworkOrigin>{}).entries) {
-      if (entry.value.source == source) return _path(entry.key);
-    }
+  /// [copyOf] while that file is still there. A copy deleted outside the app
+  /// is forgotten, so the song streams and shows as on the server again.
+  Future<String?> existingCopyOf(String source) async {
+    await load();
+    final copy = _copies[source];
+    if (copy == null) return null;
+    if (await File(copy).exists()) return copy;
+    await remove(source);
     return null;
   }
 
-  /// The phone copy of [source] while it is still there.
-  Future<String?> copyOf(String source) async {
-    await load();
-    final path = cachedCopyOf(source);
-    return path != null && await File(path).exists() ? path : null;
-  }
+  /// Download records the first builds pointed at a copy, by that copy, with
+  /// the song to point them back at. Empty once [put] or [remove] runs.
+  Map<String, String> get legacyDownloads => Map.unmodifiable(_legacyDownloads);
 
-  /// Whether a phone copy of [source] is still there.
-  Future<bool> hasCopyOf(String source) async => await copyOf(source) != null;
+  Future<void> put(String source, String copy) =>
+      _write(() => _copies[source] = copy);
 
-  /// Every phone copy, by its current path.
-  Future<Map<String, NetworkOrigin>> copies() async => {
-    for (final entry in (await load()).entries) _path(entry.key): entry.value,
-  };
+  Future<void> remove(String source) => _write(() => _copies.remove(source));
 
-  /// Tells views a copy's record changed after the copy itself was noted.
-  void recordChanged() => revision.value++;
-
-  Future<void> put(String path, NetworkOrigin origin) =>
-      _write((entries) => entries[_key(path)] = origin);
-
-  Future<void> remove(String path) =>
-      _write((entries) => entries.remove(_key(path)));
-
-  Future<void> _write(void Function(Map<String, NetworkOrigin>) change) {
+  Future<void> _write(void Function() change) {
     final next = _mutation.then((_) async {
-      final entries = await load();
-      change(entries);
+      await load();
+      change();
+      _legacyDownloads.clear();
       final file = await _file();
       await file.parent.create(recursive: true);
       final temp = File('${file.path}.tmp');
-      await temp.writeAsString(
-        jsonEncode({
-          for (final entry in entries.entries)
-            entry.key: {
-              'source': entry.value.source,
-              'restore': entry.value.restore,
-            },
-        }),
-      );
+      await temp.writeAsString(jsonEncode(_copies));
       // Atomic: a crash never leaves half a file.
       await temp.rename(file.path);
       revision.value++;

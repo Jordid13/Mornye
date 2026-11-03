@@ -30,6 +30,7 @@ extension NetworkStorageDelete on NetworkStorageService {
   /// Protocol capability only; the server still decides write permission.
   Future<bool> canDeleteFile(String source) async {
     try {
+      if (await offlineCopy(source) != null) return false;
       return await _deletionLocation(source) != null;
     } catch (_) {
       return false;
@@ -39,6 +40,9 @@ extension NetworkStorageDelete on NetworkStorageService {
   /// Deletes one file, never a folder. Only confirmed absence is successful.
   /// Transport/permission failures propagate so callers keep their index rows.
   Future<bool> deleteFile(String source) async {
+    // A song saved to this device shows as "Downloaded": deleting it must
+    // never reach the server. Its phone copy is removed first.
+    if (await offlineCopy(source) != null) return false;
     final location = await _deletionLocation(source);
     if (location == null) return false;
     final (:connection, :path) = location;

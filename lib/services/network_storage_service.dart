@@ -303,6 +303,13 @@ class NetworkStorageService {
 
   /// Songs saved to this device, served from their copies.
   final NetworkOfflineOrigins _offlineCopies;
+
+  /// The phone copy of [source] while it is there. Copies load at startup;
+  /// songs without one never wait on the disk.
+  Future<String?> offlineCopy(String source) async =>
+      _offlineCopies.copyOf(source) == null
+      ? null
+      : _offlineCopies.existingCopyOf(source);
   static const _storage = FlutterSecureStorage(
     aOptions: secureStorageAndroidOptions,
     mOptions: secureStorageMacOsOptions,
@@ -430,7 +437,7 @@ class NetworkStorageService {
   /// Songs of a host neither knows, such as a phone after Link stopped,
   /// cannot.
   Future<bool> reachable(String source) async {
-    if (await _offlineCopies.hasCopyOf(source)) return true;
+    if (await offlineCopy(source) != null) return true;
     final host = Uri.tryParse(source)?.host ?? '';
     if (virtualFor(host) case final virtual?) return virtual.reachable(host);
     if (_unreachable.containsKey(host)) return false;
@@ -636,7 +643,7 @@ class NetworkStorageService {
       return virtual.resolve(host, path);
     }
     // A song saved to this device is served from that copy, also offline.
-    if (await _offlineCopies.copyOf(source) == null) {
+    if (await offlineCopy(source) == null) {
       await _readyConnection(host, path);
     }
     final server = await _proxy();
@@ -1451,7 +1458,7 @@ class NetworkStorageService {
         return;
       }
       final range = request.headers.value(HttpHeaders.rangeHeader);
-      final copy = await _offlineCopies.copyOf(route.source);
+      final copy = await offlineCopy(route.source);
       read = copy != null
           ? await _openLocalRead(copy, method: request.method, range: range)
           : await _openRead(
