@@ -16,6 +16,7 @@ import 'package:mornye/services/network_smb_client.dart';
 import 'package:mornye/services/platform_bridge.dart';
 import 'package:mornye/services/secure_storage_options.dart';
 import 'package:mornye/services/source_deletion_events.dart';
+import 'package:mornye/services/network_offline_origins.dart';
 import 'package:xml/xml.dart';
 
 part 'network_storage_upload.dart';
@@ -292,11 +293,16 @@ class NetworkStorageService {
     Future<void> Function(String)? write,
     Future<void> Function(Uri)? ensureAccess,
     NetworkSmbSessions? smbSessions,
-  }) : _read = read ?? (() => _storage.read(key: _key)),
+    NetworkOfflineOrigins? offlineCopies,
+  }) : _offlineCopies = offlineCopies ?? NetworkOfflineOrigins.instance,
+       _read = read ?? (() => _storage.read(key: _key)),
        _write = write ?? ((value) => _storage.write(key: _key, value: value)),
        _ensureAccess = ensureAccess ?? LocalNetworkAccess.instance.ensureAccess,
        _smbSessions = smbSessions ?? NetworkSmbSessions(idle: timeout);
   static final instance = NetworkStorageService();
+
+  /// Songs saved to this device, served from their copies.
+  final NetworkOfflineOrigins _offlineCopies;
   static const _storage = FlutterSecureStorage(
     aOptions: secureStorageAndroidOptions,
     mOptions: secureStorageMacOsOptions,
@@ -344,7 +350,7 @@ class NetworkStorageService {
   List<NetworkConnection>? _connections;
   Future<HttpServer>? _server;
   Future<void> _mutation = Future.value();
-  final _routes = <String, ({String id, String path})>{};
+  final _routes = <String, ({String id, String path, String source})>{};
   final _readClients =
       <
         ({
@@ -424,6 +430,7 @@ class NetworkStorageService {
   /// Songs of a host neither knows, such as a phone after Link stopped,
   /// cannot.
   Future<bool> reachable(String source) async {
+    if (await _offlineCopies.hasCopyOf(source)) return true;
     final host = Uri.tryParse(source)?.host ?? '';
     if (virtualFor(host) case final virtual?) return virtual.reachable(host);
     if (_unreachable.containsKey(host)) return false;
@@ -628,7 +635,10 @@ class NetworkStorageService {
     if (virtualFor(host) case final virtual?) {
       return virtual.resolve(host, path);
     }
-    await _readyConnection(host, path);
+    // A song saved to this device is served from that copy, also offline.
+    if (await _offlineCopies.copyOf(source) == null) {
+      await _readyConnection(host, path);
+    }
     _server ??= HttpServer.bind(InternetAddress.loopbackIPv4, 0).then((server) {
       server.listen((request) => unawaited(_serve(request)));
       return server;
@@ -644,7 +654,7 @@ class NetworkStorageService {
     while (_routes.length >= 256) {
       _routes.remove(_routes.keys.first);
     }
-    _routes[token] = (id: host, path: path);
+    _routes[token] = (id: host, path: path, source: source);
     return 'http://127.0.0.1:${server.port}/$token';
   }
 
@@ -1355,6 +1365,48 @@ class NetworkStorageService {
     }
   }
 
+  /// The phone copy at [path], read like a server file: the player, tag and
+  /// lyrics readers and analysis get the same answers, offline too.
+  Future<_NetworkRead> _openLocalRead(
+    String path, {
+    required String method,
+    String? range,
+  }) async {
+    final file = File(path);
+    final size = await file.length();
+    final ({int start, int end}) part;
+    try {
+      part = networkByteRange(range, size);
+    } on FormatException {
+      return (
+        status: HttpStatus.requestedRangeNotSatisfiable,
+        headers: {
+          if (method == 'GET') HttpHeaders.contentLengthHeader: '0',
+          HttpHeaders.contentRangeHeader: 'bytes */$size',
+        },
+        bytes: const Stream<List<int>>.empty(),
+        discard: () async {},
+        close: () async {},
+      );
+    }
+    return (
+      status: range == null ? HttpStatus.ok : HttpStatus.partialContent,
+      headers: {
+        HttpHeaders.acceptRangesHeader: 'bytes',
+        HttpHeaders.contentTypeHeader: networkContentType(path),
+        HttpHeaders.contentLengthHeader: '${part.end - part.start + 1}',
+        if (range != null)
+          HttpHeaders.contentRangeHeader:
+              'bytes ${part.start}-${part.end}/$size',
+      },
+      bytes: size > 0
+          ? file.openRead(part.start, part.end + 1)
+          : const Stream<List<int>>.empty(),
+      discard: () async {},
+      close: () async {},
+    );
+  }
+
   Future<void> _serve(HttpRequest request) async {
     _NetworkRead? read;
     var consumed = false;
@@ -1364,12 +1416,16 @@ class NetworkStorageService {
         request.response.statusCode = HttpStatus.notFound;
         return;
       }
-      read = await _openRead(
-        await connection(route.id),
-        route.path,
-        method: request.method,
-        range: request.headers.value(HttpHeaders.rangeHeader),
-      );
+      final range = request.headers.value(HttpHeaders.rangeHeader);
+      final copy = await _offlineCopies.copyOf(route.source);
+      read = copy != null
+          ? await _openLocalRead(copy, method: request.method, range: range)
+          : await _openRead(
+              await connection(route.id),
+              route.path,
+              method: request.method,
+              range: range,
+            );
       request.response.statusCode = read.status >= 300 && read.status < 400
           ? HttpStatus.badGateway
           : read.status;

@@ -76,6 +76,13 @@ extension _TrackMetadataMenu on _TrackMetadataScreenState {
           label: l10n.linkSaveToPhone,
           onTap: () => networkSaveToPhone(screenContext, ref, networkSongs),
         ),
+      if (localItem != null && hasNetworkPhoneCopy(localItem.filePath))
+        _MetadataOption(
+          icon: Icons.cloud_done_outlined,
+          label: l10n.networkRemoveFromPhone,
+          onTap: () =>
+              networkRemoveCopy(screenContext, ref, localItem.filePath),
+        ),
       if (isNetworkPhoneCopy(downloadItem))
         _MetadataOption(
           icon: Icons.cloud_done_outlined,

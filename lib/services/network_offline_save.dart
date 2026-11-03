@@ -1,24 +1,24 @@
-import 'dart:convert';
 import 'dart:io';
 
-import 'package:path/path.dart' as p;
-import 'package:path_provider/path_provider.dart';
 import 'package:mornye/models/download_history.dart';
 import 'package:mornye/models/library_database_models.dart';
 import 'package:mornye/models/unified_library_item.dart';
 import 'package:mornye/services/link/features/link_save_offline.dart';
+import 'package:mornye/services/network_offline_origins.dart';
 import 'package:mornye/services/network_storage_service.dart';
+
+export 'package:mornye/services/network_offline_origins.dart';
 
 /// Saves songs that stream from network storage (`network://`: WebDAV, SMB,
 /// HTTP, Subsonic) to this phone, with the same saver as Mornye Link's
-/// "Save to this phone": the original file goes into the download folder and
-/// a history record makes it a Library download.
+/// "Save to this phone": the original file goes into the download folder.
+/// [NetworkOfflineOrigins] remembers which song each copy came from.
 ///
-/// A song that already has a history record (a download published to the
-/// network destination) keeps that one record, now pointing at the phone
-/// copy. [NetworkOfflineOrigins] remembers the server file, so "Remove from
-/// this phone" points the record back at it. The server file is never
-/// changed.
+/// A scanned song keeps its Library row; [NetworkStorageService] then serves
+/// it from the copy, offline too, so albums and artists stay whole. A
+/// network download's history record (one published to the network
+/// destination) points at the copy instead, and "Remove from this phone"
+/// points it back. The server file is never changed.
 
 /// Fetches a network song's original file through [NetworkStorageService]'s
 /// proxy, with its credentials and trusted certificate.
@@ -83,123 +83,6 @@ class NetworkFileTransport implements LinkOfflineTransport {
     _closed = true;
     _client?.close(force: true);
     _client = null;
-  }
-}
-
-/// Where a phone copy came from.
-class NetworkOrigin {
-  const NetworkOrigin(this.source, {required this.restore});
-
-  /// The `network://` song the copy was saved from.
-  final String source;
-
-  /// Whether removing the copy points its history record back at [source]
-  /// (it was a network download's record) instead of deleting the record.
-  final bool restore;
-}
-
-/// Phone copies and the network songs they came from, kept in their own
-/// file beside the download history, so the history schema stays upstream's
-/// and an official build simply ignores it.
-class NetworkOfflineOrigins {
-  NetworkOfflineOrigins({
-    Future<File> Function()? file,
-    Future<Directory> Function()? documents,
-  }) : _file = file ?? _defaultFile,
-       _documents = documents ?? getApplicationDocumentsDirectory;
-
-  static final instance = NetworkOfflineOrigins();
-
-  final Future<File> Function() _file;
-  final Future<Directory> Function() _documents;
-  Map<String, NetworkOrigin>? _entries;
-  Future<void> _mutation = Future.value();
-
-  static Future<File> _defaultFile() async => File(
-    p.join(
-      (await getApplicationSupportDirectory()).path,
-      'network_offline_origins.json',
-    ),
-  );
-
-  /// iOS moves the app's container on updates, so copies under Documents
-  /// are keyed relative to it.
-  static String _key(String path) {
-    final index = path.indexOf('/Documents/');
-    return index < 0 ? path : path.substring(index + 1);
-  }
-
-  Future<String> _path(String key) async => key.startsWith('Documents/')
-      ? p.join((await _documents()).parent.path, key)
-      : key;
-
-  Future<Map<String, NetworkOrigin>> load() async {
-    final loaded = _entries;
-    if (loaded != null) return loaded;
-    final entries = <String, NetworkOrigin>{};
-    try {
-      final json = jsonDecode(await (await _file()).readAsString());
-      if (json is Map) {
-        json.forEach((key, value) {
-          if (key is! String || value is! Map) return;
-          final source = value['source'];
-          if (source is String) {
-            entries[key] = NetworkOrigin(
-              source,
-              restore: value['restore'] == true,
-            );
-          }
-        });
-      }
-    } on Object {
-      // No file yet, or unreadable: no copies are known.
-    }
-    return _entries ??= entries;
-  }
-
-  /// The origin of the phone copy at [path], once [load] has run.
-  NetworkOrigin? cached(String path) => _entries?[_key(path)];
-
-  Future<NetworkOrigin?> of(String path) async => (await load())[_key(path)];
-
-  /// Whether a phone copy of [source] is still there.
-  Future<bool> hasCopyOf(String source) async {
-    for (final entry in (await load()).entries) {
-      if (entry.value.source == source &&
-          await File(await _path(entry.key)).exists()) {
-        return true;
-      }
-    }
-    return false;
-  }
-
-  Future<void> put(String path, NetworkOrigin origin) =>
-      _write((entries) => entries[_key(path)] = origin);
-
-  Future<void> remove(String path) =>
-      _write((entries) => entries.remove(_key(path)));
-
-  Future<void> _write(void Function(Map<String, NetworkOrigin>) change) {
-    final next = _mutation.then((_) async {
-      final entries = await load();
-      change(entries);
-      final file = await _file();
-      await file.parent.create(recursive: true);
-      final temp = File('${file.path}.tmp');
-      await temp.writeAsString(
-        jsonEncode({
-          for (final entry in entries.entries)
-            entry.key: {
-              'source': entry.value.source,
-              'restore': entry.value.restore,
-            },
-        }),
-      );
-      // Atomic: a crash never leaves half a file.
-      await temp.rename(file.path);
-    });
-    _mutation = next.catchError((Object _) {});
-    return next;
   }
 }
 
@@ -280,22 +163,24 @@ class NetworkOfflineSaver {
       record: (saved) async {
         final item = bySaverId[saved.id]!;
         final download = item.historyItem;
-        // A network download's record now points at the phone copy.
-        await record(
-          download == null
-              ? saved
-              : download.copyWith(
-                  filePath: saved.filePath,
-                  storageMode: saved.storageMode,
-                  downloadTreeUri: saved.downloadTreeUri,
-                  safRelativeDir: saved.safRelativeDir,
-                  safFileName: saved.safFileName,
-                ),
-        );
+        // Known before the record is written, so its keys include the song.
         await origins.put(
           saved.filePath,
           NetworkOrigin(item.filePath, restore: download != null),
         );
+        // A network download's record now points at the phone copy. A
+        // scanned song keeps its Library row, which then plays the copy.
+        if (download != null) {
+          await record(
+            download.copyWith(
+              filePath: saved.filePath,
+              storageMode: saved.storageMode,
+              downloadTreeUri: saved.downloadTreeUri,
+              safRelativeDir: saved.safRelativeDir,
+              safFileName: saved.safFileName,
+            ),
+          );
+        }
       },
       exists: (id) => origins.hasCopyOf(bySaverId[id]!.filePath),
     );
@@ -310,6 +195,17 @@ class NetworkOfflineSaver {
       onProgress: onProgress,
       cancel: cancel,
     );
+  }
+
+  /// Deletes the phone copy of the scanned network song [source], keeping
+  /// the server file. Returns false when it has none.
+  Future<bool> removeCopyOf(String source) async {
+    await origins.load();
+    final path = origins.cachedCopyOf(source);
+    if (path == null) return false;
+    if (await File(path).exists() && !await deleteLocalFile(path)) return false;
+    await origins.remove(path);
+    return true;
   }
 
   /// Deletes the phone copy [item] records, keeping the server file. Returns

@@ -44,6 +44,7 @@ import 'package:mornye/services/link/link_client_api.dart';
 import 'package:mornye/services/music_player_service.dart';
 import 'package:mornye/services/playback_notification.dart';
 import 'package:mornye/services/player_widget_service.dart';
+import 'package:mornye/services/history_database.dart';
 import 'package:mornye/services/network_offline_save.dart';
 import 'package:mornye/screens/now_playing_screen.dart';
 import 'package:mornye/utils/desktop_platform.dart';
@@ -180,7 +181,11 @@ void main() {
       // with no fade from the seed colors; a late answer still applies.
       await dynamicColors.settle(const Duration(milliseconds: 100));
       // Song menus ask synchronously which downloads are network phone copies.
-      unawaited(NetworkOfflineOrigins.instance.load());
+      unawaited(
+        NetworkOfflineOrigins.instance.copies().then(
+          HistoryDatabase.instance.adoptNetworkCopies,
+        ),
+      );
 
       runApp(
         ProviderScope(

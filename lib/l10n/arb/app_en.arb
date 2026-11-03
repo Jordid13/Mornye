@@ -10268,5 +10268,9 @@
   "networkRemovedFromPhone": "Removed from this phone. It stays on your server.",
   "@networkRemovedFromPhone": {
     "description": "Snackbar after removing the phone copy of a network song"
+  },
+  "librarySourceServer": "Server",
+  "@librarySourceServer": {
+    "description": "Library song tag: the song streams from network storage and is not on this device"
   }
 }

@@ -69,6 +69,7 @@ import 'package:mornye/widgets/album_detail_header.dart'
     show HeaderMetaRow, HeaderMetaItem, HeaderCircleButton, HeaderFilledButton;
 import 'package:mornye/widgets/desktop/context_menu.dart';
 import 'package:mornye/widgets/link/link_actions.dart';
+import 'package:mornye/services/network_offline_origins.dart';
 import 'package:mornye/widgets/network_offline_actions.dart';
 import 'package:mornye/widgets/link/link_library_actions.dart';
 import 'package:mornye/services/link/features/link_track_refs.dart';

@@ -40,10 +40,13 @@ List<UnifiedLibraryItem> networkSavableItems(
   Iterable<UnifiedLibraryItem> items,
 ) {
   final server = ref.read(linkPhoneClientProvider)?.server;
+  final copies = NetworkOfflineOrigins.instance;
   return networkSongItems(items)
       .where(
         (item) =>
-            server == null || linkDesktopSongId(item.filePath, server) == null,
+            copies.cachedCopyOf(item.filePath) == null &&
+            (server == null ||
+                linkDesktopSongId(item.filePath, server) == null),
       )
       .toList(growable: false);
 }
@@ -77,8 +80,42 @@ void networkSaveToPhone(
       _log.e('Saving network songs failed: $error', error, stack);
       message = l10n.networkSaveFailed(songs.length);
     }
+    _refreshLibrary(ref);
     if (root.mounted) showAppSnackBar(root, content: Text(message));
   });
+}
+
+/// Library rows show whether a network song has a phone copy; redraw them.
+void _refreshLibrary(WidgetRef ref) {
+  try {
+    unawaited(ref.read(downloadHistoryProvider.notifier).reloadFromStorage());
+  } on StateError {
+    // The screen that asked is gone; the next Library load shows it.
+  }
+}
+
+/// Whether the scanned network song at [path] has a phone copy.
+bool hasNetworkPhoneCopy(String? path) =>
+    path != null &&
+    path.startsWith('network://') &&
+    NetworkOfflineOrigins.instance.cachedCopyOf(path) != null;
+
+/// "Remove from this phone" for a scanned network song: deletes its phone
+/// copy, keeping the song on the server.
+Future<void> networkRemoveCopy(
+  BuildContext context,
+  WidgetRef ref,
+  String source,
+) async {
+  final l10n = context.l10n;
+  final removed = await ref
+      .read(networkOfflineSaverProvider)
+      .removeCopyOf(source);
+  if (!removed) return;
+  _refreshLibrary(ref);
+  if (context.mounted) {
+    showAppSnackBar(context, content: Text(l10n.networkRemovedFromPhone));
+  }
 }
 
 /// Whether [item] is a phone copy of a network song.
@@ -95,6 +132,7 @@ Future<void> networkRemoveFromPhone(
 ) async {
   final l10n = context.l10n;
   final removed = await ref.read(networkOfflineSaverProvider).remove(item);
+  if (removed) _refreshLibrary(ref);
   if (context.mounted && removed) {
     showAppSnackBar(context, content: Text(l10n.networkRemovedFromPhone));
   }

@@ -1046,7 +1046,14 @@ extension _QueueTabItemWidgets on _QueueTabState {
 
     final isDownloaded = item.source == LibraryItemSource.downloaded;
     final quality = item.qualityForMode(_libraryQualityLabelMode);
-    final sourceLabel = isDownloaded
+    // Where the file is: streamed from network storage, or on this device.
+    final sourceLabel =
+        item.filePath.startsWith('network://') &&
+            NetworkOfflineOrigins.instance.cachedCopyOf(item.filePath) == null
+        ? context.l10n.librarySourceServer
+        : item.filePath.startsWith('network://')
+        ? context.l10n.librarySourceDownloaded
+        : isDownloaded
         ? context.l10n.librarySourceDownloaded
         : context.l10n.librarySourceLocal;
     // The label text tells the sources apart; rows keep one neutral role.

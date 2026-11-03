@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -144,13 +145,18 @@ void main() {
     expect(await File(saved.filePath).readAsBytes(), _bytes);
   });
 
-  test('a scanned network song gets a record of its own', () async {
-    await saver.save([UnifiedLibraryItem.fromLocalLibrary(_row())]);
+  test('a scanned network song keeps its row and plays the copy', () async {
+    final origins = saver.origins;
+    final result = await saver.save([
+      UnifiedLibraryItem.fromLocalLibrary(_row()),
+    ]);
 
-    final saved = records.single;
-    expect(saved.id, isNot('row1'));
-    expect(saved.trackName, 'Other');
-    expect(await File(saved.filePath).exists(), isTrue);
+    expect(result.saved, 1);
+    expect(records, isEmpty, reason: 'no second Library entry');
+    final copy = await origins.copyOf(_subsonic);
+    expect(copy, isNotNull);
+    expect(await File(copy!).readAsBytes(), _bytes);
+    expect(origins.cachedCopyOf(_subsonic), copy);
   });
 
   test('only network songs are saved, each once', () async {
@@ -188,12 +194,16 @@ void main() {
     },
   );
 
-  test('removing a scanned song copy deletes its record', () async {
+  test('removing a scanned song copy keeps the server song', () async {
     await saver.save([UnifiedLibraryItem.fromLocalLibrary(_row())]);
-    final copy = records.single;
+    final copy = await saver.origins.copyOf(_subsonic);
 
-    expect(await saver.remove(copy), isTrue);
-    expect(forgotten, [copy.id]);
+    expect(await saver.removeCopyOf(_subsonic), isTrue);
+    expect(await File(copy!).exists(), isFalse);
+    expect(await saver.origins.copyOf(_subsonic), isNull);
+    expect(records, isEmpty);
+    expect(forgotten, isEmpty);
+    expect(await saver.removeCopyOf(_subsonic), isFalse);
   });
 
   test('remove leaves other downloads alone', () async {
@@ -220,6 +230,53 @@ void main() {
     expect((await reloaded.of(movedPath))?.source, _webdav);
     expect(await reloaded.hasCopyOf(_webdav), isTrue);
   });
+
+  test(
+    'a saved song is served from its copy while the server is down',
+    () async {
+      final copy = File(p.join(documents.path, 'Mornye', 'Band', 'Song.flac'));
+      await copy.parent.create(recursive: true);
+      await copy.writeAsBytes(_bytes);
+      final origins = NetworkOfflineOrigins(
+        file: () async => originsFile,
+        documents: () async => documents,
+      );
+      // Port 1 refuses connections: the server is unreachable.
+      final storage = NetworkStorageService(
+        read: () async => jsonEncode([
+          const NetworkConnection(
+            id: 'conn9',
+            name: 'down',
+            protocol: NetworkProtocol.webdav,
+            address: 'http://127.0.0.1:1/',
+          ).toJson(),
+        ]),
+        write: (_) async {},
+        ensureAccess: (_) async {},
+        offlineCopies: origins,
+      );
+      final source = NetworkStorageService.source('conn9', 'Band/Song.flac');
+      await origins.put(copy.path, NetworkOrigin(source, restore: false));
+
+      expect(await storage.reachable(source), isTrue);
+      final url = Uri.parse(await storage.resolve(source));
+      expect(url.host, '127.0.0.1', reason: 'still the proxy, for tag readers');
+      final client = HttpClient();
+      try {
+        final whole = await (await client.getUrl(url)).close();
+        expect(whole.statusCode, 200);
+        expect(await whole.expand((c) => c).toList(), _bytes);
+        final request = await client.getUrl(url);
+        request.headers.set(HttpHeaders.rangeHeader, 'bytes=100-199');
+        final part = await request.close();
+        expect(part.statusCode, 206);
+        expect(await part.expand((c) => c).toList(), _bytes.sublist(100, 200));
+      } finally {
+        client.close(force: true);
+        await storage.dispose();
+      }
+    },
+  );
 
   group('NetworkFileTransport', () {
     late HttpServer server;

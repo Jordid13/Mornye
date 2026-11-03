@@ -88,6 +88,16 @@ resolveTrackFiles(
       final index = next++;
       if (index >= tracks.length) return;
       final localPath = localMatches[index]?['filePath']?.toString() ?? '';
+      final copyPath = historyMatches[index]?['filePath']?.toString() ?? '';
+      // A download on this device plays before a network song it matches,
+      // such as the phone copy saved from it: that works offline.
+      if (localPath.startsWith('network://') &&
+          copyPath.isNotEmpty &&
+          !copyPath.startsWith('network://') &&
+          await pathExists(copyPath)) {
+        results[index] = copyPath;
+        continue;
+      }
       if (localPath.isNotEmpty && await pathExists(localPath)) {
         results[index] = localPath;
         continue;
